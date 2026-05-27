@@ -44,7 +44,6 @@ class ConfigScreen(ModalScreen[Path | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "cancel"),
-        Binding("enter", "open_file", "open in $EDITOR"),
     ]
 
     # Extensions treated as editable text.
@@ -58,18 +57,15 @@ class ConfigScreen(ModalScreen[Path | None]):
     def _collect_files(self) -> list[Path]:
         ralph_dir = self.project.ralph_dir
         found: list[Path] = []
-        # Fixed priority files first.
         for name in ("PROMPT.md", "AGENT.md"):
             f = ralph_dir / name
             if f.exists():
                 found.append(f)
-        # specs/ subdir.
         specs_dir = ralph_dir / "specs"
         if specs_dir.is_dir():
             for f in sorted(specs_dir.iterdir()):
                 if f.is_file() and f.suffix in self._TEXT_SUFFIXES and f not in found:
                     found.append(f)
-        # Other editable files in .ralph/ (skip state/log files).
         _skip = {"status.json", "progress.json", "live.log", "watchdog.log",
                  ".call_count", ".token_count", ".last_reset", ".loop_start_sha",
                  ".circuit_breaker_state", ".circuit_breaker_history",
@@ -96,16 +92,15 @@ class ConfigScreen(ModalScreen[Path | None]):
             yield Label(f"config files — {self.project.name}", id="config-title")
             if items:
                 yield ListView(*items, id="config-list")
-                yield Label("[enter] open in $EDITOR   [esc] cancel", id="config-hint")
+                yield Label("[enter / click] open in $EDITOR   [esc] cancel", id="config-hint")
             else:
                 yield Label("no editable config files found", id="config-hint")
 
-    def action_open_file(self) -> None:
-        lv = self.query_one(ListView)
-        idx = lv.index
-        if idx is None or idx >= len(self.files):
-            return
-        self.dismiss(self.files[idx])
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        # Fires on Enter keypress AND mouse click — the reliable way in Textual.
+        idx = event.list_view.index
+        if idx is not None and idx < len(self.files):
+            self.dismiss(self.files[idx])
 
     def action_cancel(self) -> None:
         self.dismiss(None)
