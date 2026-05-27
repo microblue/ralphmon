@@ -1,0 +1,293 @@
+"""Textual TUI for ralphmon."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import DataTable, Footer, Header, Label, RichLog, Static
+
+from . import core
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    """Yes/no modal."""
+
+    BINDINGS = [
+        Binding("y", "yes", "Yes"),
+        Binding("n", "no", "No"),
+        Binding("escape", "no", "Cancel"),
+    ]
+
+    def __init__(self, prompt: str) -> None:
+        super().__init__()
+        self.prompt = prompt
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-box"):
+            yield Label(self.prompt, id="confirm-prompt")
+            yield Label("[y] yes   [n] no   [esc] cancel", id="confirm-hint")
+
+    def action_yes(self) -> None:
+        self.dismiss(True)
+
+    def action_no(self) -> None:
+        self.dismiss(False)
+
+
+class RalphMonApp(App):
+    CSS = """
+    Screen { layout: vertical; }
+    #main { height: 1fr; }
+    #table-pane { width: 60%; border-right: solid $accent; }
+    #log-pane { width: 1fr; }
+    #log-title { dock: top; padding: 0 1; background: $boost; color: $text; }
+    DataTable { height: 1fr; }
+    RichLog { height: 1fr; background: $surface; }
+    #confirm-box {
+        align: center middle;
+        width: 60;
+        height: 7;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #confirm-prompt { text-align: center; }
+    #confirm-hint { text-align: center; color: $text-muted; }
+    #status-bar { dock: bottom; height: 1; padding: 0 1; background: $boost; color: $text; }
+    """
+
+    BINDINGS = [
+        Binding("q", "quit", "quit"),
+        Binding("r", "refresh", "refresh now"),
+        Binding("s", "start", "start"),
+        Binding("p", "pause_resume", "pause/resume"),
+        Binding("shift+r", "restart", "restart"),
+        Binding("x", "stop", "stop"),
+        Binding("d", "delete", "delete"),
+        Binding("a", "attach", "attach tmux"),
+    ]
+
+    REFRESH_INTERVAL = 2.0
+    LOG_TAIL_INTERVAL = 0.5
+    LOG_INITIAL_BYTES = 8 * 1024
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.projects: list[core.RalphProject] = []
+        self.current_path: Path | None = None
+        self._log_pos = 0
+        self._log_path: Path | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="main"):
+            with Vertical(id="table-pane"):
+                yield DataTable(id="projects", cursor_type="row", zebra_stripes=True)
+            with Vertical(id="log-pane"):
+                yield Static("live log: (select a project)", id="log-title")
+                yield RichLog(id="log", highlight=True, markup=False, max_lines=2000, wrap=False)
+        yield Static("", id="status-bar")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.add_columns("project", "state", "loops", "action", "calls", "last seen", "pid")
+        self.refresh_projects()
+        self.set_interval(self.REFRESH_INTERVAL, self.refresh_projects)
+        self.set_interval(self.LOG_TAIL_INTERVAL, self._tail_log)
+
+    # ───────── project list ─────────
+
+    def refresh_projects(self) -> None:
+        self.projects = core.discover_projects()
+        table = self.query_one(DataTable)
+        # Preserve selection by project path.
+        prev_path = self._selected_path()
+        table.clear()
+        new_row_index = 0
+        for i, p in enumerate(self.projects):
+            state = p.state_label
+            state_cell = self._color_state(state)
+            table.add_row(
+                p.name,
+                state_cell,
+                str(p.loop_count) if p.loop_count else "—",
+                p.last_action or "—",
+                p.calls_used or "—",
+                p.last_seen or "—",
+                str(p.pid) if p.pid else "—",
+                key=str(p.path),
+            )
+            if prev_path and Path(prev_path) == p.path:
+                new_row_index = i
+        if self.projects:
+            table.move_cursor(row=new_row_index)
+            self._on_select(self.projects[new_row_index])
+        else:
+            self._set_log_title("no ralph projects found")
+
+    def _color_state(self, state: str) -> str:
+        colors = {
+            "executing": "[bold yellow]executing[/]",
+            "running":   "[green]running[/]",
+            "paused":    "[magenta]paused[/]",
+            "idle":      "[dim]idle[/]",
+        }
+        return colors.get(state, state)
+
+    def _selected_path(self) -> str | None:
+        table = self.query_one(DataTable)
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+            return row_key.value
+        except Exception:
+            return None
+
+    def _selected_project(self) -> core.RalphProject | None:
+        sel = self._selected_path()
+        if not sel:
+            return None
+        for p in self.projects:
+            if str(p.path) == sel:
+                return p
+        return None
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        path = event.row_key.value
+        if not path:
+            return
+        for p in self.projects:
+            if str(p.path) == path:
+                self._on_select(p)
+                break
+
+    def _on_select(self, project: core.RalphProject) -> None:
+        if self.current_path == project.path:
+            return
+        self.current_path = project.path
+        self._log_path = project.live_log
+        self._log_pos = 0
+        log = self.query_one(RichLog)
+        log.clear()
+        self._set_log_title(f"live log: {project.name}  ({project.live_log})")
+        self._tail_log(initial=True)
+
+    def _set_log_title(self, text: str) -> None:
+        self.query_one("#log-title", Static).update(text)
+
+    def _set_status(self, text: str) -> None:
+        self.query_one("#status-bar", Static).update(text)
+
+    # ───────── live log tail ─────────
+
+    def _tail_log(self, initial: bool = False) -> None:
+        if self._log_path is None:
+            return
+        path = self._log_path
+        if not path.exists():
+            return
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        log = self.query_one(RichLog)
+        if initial:
+            start = max(0, size - self.LOG_INITIAL_BYTES)
+            self._log_pos = start
+        elif size < self._log_pos:
+            log.write("─── (log rotated) ───")
+            self._log_pos = 0
+        if size == self._log_pos:
+            return
+        try:
+            with path.open("rb") as f:
+                f.seek(self._log_pos)
+                chunk = f.read(size - self._log_pos)
+            self._log_pos = size
+        except OSError:
+            return
+        text = chunk.decode("utf-8", errors="replace")
+        for line in text.splitlines():
+            log.write(line)
+
+    # ───────── actions ─────────
+
+    def action_refresh(self) -> None:
+        self.refresh_projects()
+        self._set_status("refreshed")
+
+    def action_start(self) -> None:
+        p = self._selected_project()
+        if not p: return
+        ok, msg = core.start(p)
+        self._notify_op("start", p, ok, msg)
+
+    def action_pause_resume(self) -> None:
+        p = self._selected_project()
+        if not p: return
+        if p.paused:
+            ok, msg = core.resume(p)
+            op = "resume"
+        else:
+            ok, msg = core.pause(p)
+            op = "pause"
+        self._notify_op(op, p, ok, msg)
+
+    def action_restart(self) -> None:
+        p = self._selected_project()
+        if not p: return
+
+        def _maybe(confirmed: bool) -> None:
+            if not confirmed: return
+            ok, msg = core.restart(p)
+            self._notify_op("restart", p, ok, msg)
+
+        self.push_screen(ConfirmScreen(f"restart ralph in {p.name}?"), _maybe)
+
+    def action_stop(self) -> None:
+        p = self._selected_project()
+        if not p: return
+
+        def _maybe(confirmed: bool) -> None:
+            if not confirmed: return
+            ok, msg = core.stop(p)
+            self._notify_op("stop", p, ok, msg)
+
+        self.push_screen(ConfirmScreen(f"stop ralph in {p.name}?"), _maybe)
+
+    def action_delete(self) -> None:
+        p = self._selected_project()
+        if not p: return
+
+        def _maybe(confirmed: bool) -> None:
+            if not confirmed: return
+            ok, msg = core.delete(p)
+            self._notify_op("delete", p, ok, msg)
+
+        self.push_screen(
+            ConfirmScreen(f"DELETE {p.ralph_dir}? this removes all ralph state."),
+            _maybe,
+        )
+
+    def action_attach(self) -> None:
+        p = self._selected_project()
+        if not p or not p.tmux_session:
+            self._set_status("no tmux session to attach")
+            return
+        # Suspend textual, attach, resume on return.
+        import subprocess
+        with self.suspend():
+            subprocess.run(["tmux", "attach", "-t", p.tmux_session])
+
+    def _notify_op(self, op: str, project: core.RalphProject,
+                   ok: bool, msg: str) -> None:
+        prefix = "✓" if ok else "✗"
+        self._set_status(f"{prefix} {op} [{project.name}]: {msg}")
+        self.refresh_projects()
+
+
+def run() -> None:
+    RalphMonApp().run()

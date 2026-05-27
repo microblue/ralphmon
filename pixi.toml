@@ -1,0 +1,17 @@
+[workspace]
+name = "ralphmon"
+version = "0.1.0"
+description = "Local TUI to monitor and control ralph-claude-code projects"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tasks]
+mon = "python -m ralphmon"
+list = "python -m ralphmon --list"
+
+[dependencies]
+python = ">=3.11"
+
+[pypi-dependencies]
+textual = ">=0.80"
+psutil = ">=5.9"

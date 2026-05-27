@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Launcher for ralphmon — runs the TUI from anywhere.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+exec pixi run python -m ralphmon "$@"
