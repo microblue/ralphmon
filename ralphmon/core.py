@@ -71,6 +71,26 @@ class RalphProject:
     def live_log(self) -> Path:
         return self.ralph_dir / "live.log"
 
+    def available_logs(self) -> list[tuple[str, Path]]:
+        """Return (label, path) pairs for all readable log sources, best first."""
+        logs: list[tuple[str, Path]] = []
+        ralph_log = self.ralph_dir / "logs" / "ralph.log"
+        if ralph_log.exists():
+            logs.append(("ralph.log", ralph_log))
+        live = self.ralph_dir / "live.log"
+        if live.exists() and live.stat().st_size > 0:
+            logs.append(("live.log", live))
+        # Most recent claude_output log.
+        logs_dir = self.ralph_dir / "logs"
+        if logs_dir.is_dir():
+            outputs = sorted(logs_dir.glob("claude_output_*.log"), reverse=True)
+            if outputs:
+                logs.append(("last output", outputs[0]))
+        # Fallback: live.log even if empty (so there's always something).
+        if not logs:
+            logs.append(("live.log", live))
+        return logs
+
     @property
     def last_seen(self) -> str:
         ts = self.status.get("timestamp")

@@ -150,11 +150,12 @@ class RalphMonApp(App):
         Binding("d", "delete", "delete"),
         Binding("a", "attach", "attach tmux"),
         Binding("c", "config", "config files"),
+        Binding("l", "cycle_log", "cycle log"),
     ]
 
     REFRESH_INTERVAL = 2.0
     LOG_TAIL_INTERVAL = 0.5
-    LOG_INITIAL_BYTES = 8 * 1024
+    LOG_INITIAL_BYTES = 16 * 1024  # show more context by default
 
     def __init__(self) -> None:
         super().__init__()
@@ -162,6 +163,9 @@ class RalphMonApp(App):
         self.current_path: Path | None = None
         self._log_pos = 0
         self._log_path: Path | None = None
+        self._log_label: str = ""
+        self._log_sources: list[tuple[str, Path]] = []
+        self._log_source_idx: int = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -207,7 +211,12 @@ class RalphMonApp(App):
                 new_row_index = i
         if self.projects:
             table.move_cursor(row=new_row_index)
-            self._on_select(self.projects[new_row_index])
+            p = self.projects[new_row_index]
+            if p.path != self.current_path:
+                self._on_select(p)
+            else:
+                # Same project — refresh log sources without resetting which one we're viewing.
+                self._load_log_sources(p, reset_idx=False)
         else:
             self._set_log_title("no ralph projects found")
 
@@ -250,11 +259,29 @@ class RalphMonApp(App):
         if self.current_path == project.path:
             return
         self.current_path = project.path
-        self._log_path = project.live_log
+        self._load_log_sources(project, reset_idx=True)
+
+    def _load_log_sources(self, project: core.RalphProject, reset_idx: bool = False) -> None:
+        self._log_sources = project.available_logs()
+        if reset_idx:
+            self._log_source_idx = 0
+        else:
+            self._log_source_idx = min(self._log_source_idx, len(self._log_sources) - 1)
+        label, path = self._log_sources[self._log_source_idx]
+        self._switch_log(label, path, project)
+
+    def _switch_log(self, label: str, path: Path, project: core.RalphProject) -> None:
+        self._log_label = label
+        self._log_path = path
         self._log_pos = 0
         log = self.query_one(RichLog)
         log.clear()
-        self._set_log_title(f"live log: {project.name}  ({project.live_log})")
+        total = len(self._log_sources)
+        idx = self._log_source_idx + 1
+        self._set_log_title(
+            f"[{idx}/{total}] {label}: {project.name}  "
+            f"[tab=cycle]  ({path})"
+        )
         self._tail_log(initial=True)
 
     def _set_log_title(self, text: str) -> None:
@@ -296,6 +323,14 @@ class RalphMonApp(App):
             log.write(line)
 
     # ───────── actions ─────────
+
+    def action_cycle_log(self) -> None:
+        p = self._selected_project()
+        if not p or not self._log_sources:
+            return
+        self._log_source_idx = (self._log_source_idx + 1) % len(self._log_sources)
+        label, path = self._log_sources[self._log_source_idx]
+        self._switch_log(label, path, p)
 
     def action_refresh(self) -> None:
         self.refresh_projects()
