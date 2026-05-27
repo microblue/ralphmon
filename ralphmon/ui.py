@@ -9,7 +9,8 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Label, ListItem, ListView, RichLog, Static
+from textual.widgets import Button, DataTable, Footer, Header, Label, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 
 from . import core
 
@@ -18,18 +19,17 @@ class ConfirmScreen(ModalScreen[bool]):
     """Yes/no modal."""
 
     CSS = """
-    ConfirmScreen {
-        align: center middle;
-    }
+    ConfirmScreen { align: center middle; }
     ConfirmScreen > Vertical {
-        width: 62;
+        width: 64;
         height: auto;
         border: thick $accent;
         background: $surface;
         padding: 2 3;
     }
-    ConfirmScreen #confirm-prompt { text-align: center; padding-bottom: 1; }
-    ConfirmScreen #confirm-hint   { text-align: center; color: $text-muted; }
+    ConfirmScreen #confirm-prompt { text-align: center; padding-bottom: 2; }
+    ConfirmScreen #btn-row        { height: auto; align: center middle; }
+    ConfirmScreen Button          { margin: 0 2; min-width: 12; }
     """
 
     BINDINGS = [
@@ -45,7 +45,12 @@ class ConfirmScreen(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Label(self.prompt, id="confirm-prompt")
-            yield Label("[y] yes   [n] no   [esc] cancel", id="confirm-hint")
+            with Horizontal(id="btn-row"):
+                yield Button("Yes [y]", id="btn-yes", variant="error")
+                yield Button("No [n]",  id="btn-no",  variant="default")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "btn-yes")
 
     def action_yes(self) -> None:
         self.dismiss(True)
@@ -58,19 +63,17 @@ class ConfigScreen(ModalScreen[Path | None]):
     """File picker for a ralph project's editable config files."""
 
     CSS = """
-    ConfigScreen {
-        align: center middle;
-    }
+    ConfigScreen { align: center middle; }
     ConfigScreen > Vertical {
-        width: 74;
+        width: 76;
         height: auto;
-        max-height: 28;
+        max-height: 30;
         border: thick $accent;
         background: $surface;
         padding: 1 2;
     }
     ConfigScreen #config-title { text-align: center; padding-bottom: 1; color: $accent; }
-    ConfigScreen ListView      { height: auto; max-height: 18; }
+    ConfigScreen OptionList    { height: auto; max-height: 20; }
     ConfigScreen #config-hint  { text-align: center; color: $text-muted; padding-top: 1; }
     """
 
@@ -78,7 +81,6 @@ class ConfigScreen(ModalScreen[Path | None]):
         Binding("escape", "cancel", "cancel"),
     ]
 
-    # Extensions treated as editable text.
     _TEXT_SUFFIXES = {".md", ".txt", ".yaml", ".yml", ".toml", ".sh", ".json", ".template"}
 
     def __init__(self, project: core.RalphProject) -> None:
@@ -112,33 +114,31 @@ class ConfigScreen(ModalScreen[Path | None]):
                 found.append(f)
         return found
 
+    def _label(self, f: Path) -> str:
+        tag = {"PROMPT.md": "(PROMPT)", "AGENT.md": "(AGENT) "}.get(f.name, "        ")
+        return f"{tag}  {f.relative_to(self.project.path)}"
+
     def compose(self) -> ComposeResult:
-        items = [
-            ListItem(Label(
-                f"{'(PROMPT)' if f.name == 'PROMPT.md' else '(AGENT) ' if f.name == 'AGENT.md' else '        '}"
-                f"  {f.relative_to(self.project.path)}"
-            ), id=f"file-{i}")
-            for i, f in enumerate(self.files)
-        ]
         with Vertical():
             yield Label(f"config files — {self.project.name}", id="config-title")
-            if items:
-                yield ListView(*items, id="config-list")
+            if self.files:
+                yield OptionList(
+                    *[Option(self._label(f), id=str(i)) for i, f in enumerate(self.files)],
+                    id="config-list",
+                )
                 yield Label("[enter / click] open in $EDITOR   [esc] cancel", id="config-hint")
             else:
                 yield Label("no editable config files found", id="config-hint")
 
     def on_mount(self) -> None:
-        # Ensure ListView gets focus immediately so arrow keys + enter work.
         try:
-            self.query_one(ListView).focus()
+            self.query_one(OptionList).focus()
         except Exception:
             pass
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        # Fires on Enter keypress AND mouse click — the reliable way in Textual.
-        idx = event.list_view.index
-        if idx is not None and idx < len(self.files):
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        idx = int(event.option_id)
+        if idx < len(self.files):
             self.dismiss(self.files[idx])
 
     def action_cancel(self) -> None:
@@ -423,9 +423,12 @@ class RalphMonApp(App):
             if not file_path:
                 return
             editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
-            with self.suspend():
-                subprocess.run([editor, str(file_path)])
-            self._set_status(f"saved {file_path.relative_to(p.path)}")
+            try:
+                with self.suspend():
+                    subprocess.run([editor, str(file_path)])
+                self._set_status(f"saved {file_path.relative_to(p.path)}")
+            except Exception:
+                self._set_status(f"set $EDITOR env var to edit {file_path.name}")
 
         self.push_screen(ConfigScreen(p), _open)
 
