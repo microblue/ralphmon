@@ -17,6 +17,21 @@ from . import core
 class ConfirmScreen(ModalScreen[bool]):
     """Yes/no modal."""
 
+    CSS = """
+    ConfirmScreen {
+        align: center middle;
+    }
+    ConfirmScreen > Vertical {
+        width: 62;
+        height: auto;
+        border: thick $accent;
+        background: $surface;
+        padding: 2 3;
+    }
+    ConfirmScreen #confirm-prompt { text-align: center; padding-bottom: 1; }
+    ConfirmScreen #confirm-hint   { text-align: center; color: $text-muted; }
+    """
+
     BINDINGS = [
         Binding("y", "yes", "Yes"),
         Binding("n", "no", "No"),
@@ -28,7 +43,7 @@ class ConfirmScreen(ModalScreen[bool]):
         self.prompt = prompt
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-box"):
+        with Vertical():
             yield Label(self.prompt, id="confirm-prompt")
             yield Label("[y] yes   [n] no   [esc] cancel", id="confirm-hint")
 
@@ -41,6 +56,23 @@ class ConfirmScreen(ModalScreen[bool]):
 
 class ConfigScreen(ModalScreen[Path | None]):
     """File picker for a ralph project's editable config files."""
+
+    CSS = """
+    ConfigScreen {
+        align: center middle;
+    }
+    ConfigScreen > Vertical {
+        width: 74;
+        height: auto;
+        max-height: 28;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    ConfigScreen #config-title { text-align: center; padding-bottom: 1; color: $accent; }
+    ConfigScreen ListView      { height: auto; max-height: 18; }
+    ConfigScreen #config-hint  { text-align: center; color: $text-muted; padding-top: 1; }
+    """
 
     BINDINGS = [
         Binding("escape", "cancel", "cancel"),
@@ -83,18 +115,25 @@ class ConfigScreen(ModalScreen[Path | None]):
     def compose(self) -> ComposeResult:
         items = [
             ListItem(Label(
-                f"{'  (PROMPT)' if f.name == 'PROMPT.md' else '  (AGENT) ' if f.name == 'AGENT.md' else '          '}"
+                f"{'(PROMPT)' if f.name == 'PROMPT.md' else '(AGENT) ' if f.name == 'AGENT.md' else '        '}"
                 f"  {f.relative_to(self.project.path)}"
             ), id=f"file-{i}")
             for i, f in enumerate(self.files)
         ]
-        with Vertical(id="config-box"):
+        with Vertical():
             yield Label(f"config files — {self.project.name}", id="config-title")
             if items:
                 yield ListView(*items, id="config-list")
                 yield Label("[enter / click] open in $EDITOR   [esc] cancel", id="config-hint")
             else:
                 yield Label("no editable config files found", id="config-hint")
+
+    def on_mount(self) -> None:
+        # Ensure ListView gets focus immediately so arrow keys + enter work.
+        try:
+            self.query_one(ListView).focus()
+        except Exception:
+            pass
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         # Fires on Enter keypress AND mouse click — the reliable way in Textual.
@@ -115,28 +154,6 @@ class RalphMonApp(App):
     #log-title { dock: top; padding: 0 1; background: $boost; color: $text; }
     DataTable { height: 1fr; }
     RichLog { height: 1fr; background: $surface; }
-    #confirm-box {
-        align: center middle;
-        width: 60;
-        height: 7;
-        border: thick $accent;
-        background: $surface;
-        padding: 1 2;
-    }
-    #confirm-prompt { text-align: center; }
-    #confirm-hint { text-align: center; color: $text-muted; }
-    #config-box {
-        align: center middle;
-        width: 72;
-        height: auto;
-        max-height: 24;
-        border: thick $accent;
-        background: $surface;
-        padding: 1 2;
-    }
-    #config-title { text-align: center; padding-bottom: 1; color: $accent; }
-    #config-list { height: auto; max-height: 16; }
-    #config-hint { text-align: center; color: $text-muted; padding-top: 1; }
     #status-bar { dock: bottom; height: 1; padding: 0 1; background: $boost; color: $text; }
     """
 
