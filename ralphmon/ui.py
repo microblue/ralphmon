@@ -1,13 +1,15 @@
 """Textual TUI for ralphmon."""
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Label, RichLog, Static
+from textual.widgets import DataTable, Footer, Header, Label, ListItem, ListView, RichLog, Static
 
 from . import core
 
@@ -37,6 +39,78 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ConfigScreen(ModalScreen[Path | None]):
+    """File picker for a ralph project's editable config files."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "cancel"),
+        Binding("enter", "open_file", "open in $EDITOR"),
+    ]
+
+    # Extensions treated as editable text.
+    _TEXT_SUFFIXES = {".md", ".txt", ".yaml", ".yml", ".toml", ".sh", ".json", ".template"}
+
+    def __init__(self, project: core.RalphProject) -> None:
+        super().__init__()
+        self.project = project
+        self.files: list[Path] = self._collect_files()
+
+    def _collect_files(self) -> list[Path]:
+        ralph_dir = self.project.ralph_dir
+        found: list[Path] = []
+        # Fixed priority files first.
+        for name in ("PROMPT.md", "AGENT.md"):
+            f = ralph_dir / name
+            if f.exists():
+                found.append(f)
+        # specs/ subdir.
+        specs_dir = ralph_dir / "specs"
+        if specs_dir.is_dir():
+            for f in sorted(specs_dir.iterdir()):
+                if f.is_file() and f.suffix in self._TEXT_SUFFIXES and f not in found:
+                    found.append(f)
+        # Other editable files in .ralph/ (skip state/log files).
+        _skip = {"status.json", "progress.json", "live.log", "watchdog.log",
+                 ".call_count", ".token_count", ".last_reset", ".loop_start_sha",
+                 ".circuit_breaker_state", ".circuit_breaker_history",
+                 ".claude_session_id", ".exit_signals", ".response_analysis",
+                 ".ralph_session", "ralphmon_session"}
+        for f in sorted(ralph_dir.iterdir()):
+            if f.name.startswith(".") and f.name not in (".ralphrc",):
+                continue
+            if f.name in _skip:
+                continue
+            if f.is_file() and f.suffix in self._TEXT_SUFFIXES and f not in found:
+                found.append(f)
+        return found
+
+    def compose(self) -> ComposeResult:
+        items = [
+            ListItem(Label(
+                f"{'  (PROMPT)' if f.name == 'PROMPT.md' else '  (AGENT) ' if f.name == 'AGENT.md' else '          '}"
+                f"  {f.relative_to(self.project.path)}"
+            ), id=f"file-{i}")
+            for i, f in enumerate(self.files)
+        ]
+        with Vertical(id="config-box"):
+            yield Label(f"config files — {self.project.name}", id="config-title")
+            if items:
+                yield ListView(*items, id="config-list")
+                yield Label("[enter] open in $EDITOR   [esc] cancel", id="config-hint")
+            else:
+                yield Label("no editable config files found", id="config-hint")
+
+    def action_open_file(self) -> None:
+        lv = self.query_one(ListView)
+        idx = lv.index
+        if idx is None or idx >= len(self.files):
+            return
+        self.dismiss(self.files[idx])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class RalphMonApp(App):
     CSS = """
     Screen { layout: vertical; }
@@ -56,6 +130,18 @@ class RalphMonApp(App):
     }
     #confirm-prompt { text-align: center; }
     #confirm-hint { text-align: center; color: $text-muted; }
+    #config-box {
+        align: center middle;
+        width: 72;
+        height: auto;
+        max-height: 24;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #config-title { text-align: center; padding-bottom: 1; color: $accent; }
+    #config-list { height: auto; max-height: 16; }
+    #config-hint { text-align: center; color: $text-muted; padding-top: 1; }
     #status-bar { dock: bottom; height: 1; padding: 0 1; background: $boost; color: $text; }
     """
 
@@ -68,6 +154,7 @@ class RalphMonApp(App):
         Binding("x", "stop", "stop"),
         Binding("d", "delete", "delete"),
         Binding("a", "attach", "attach tmux"),
+        Binding("c", "config", "config files"),
     ]
 
     REFRESH_INTERVAL = 2.0
@@ -277,10 +364,23 @@ class RalphMonApp(App):
         if not p or not p.tmux_session:
             self._set_status("no tmux session to attach")
             return
-        # Suspend textual, attach, resume on return.
-        import subprocess
         with self.suspend():
             subprocess.run(["tmux", "attach", "-t", p.tmux_session])
+
+    def action_config(self) -> None:
+        p = self._selected_project()
+        if not p:
+            return
+
+        def _open(file_path: Path | None) -> None:
+            if not file_path:
+                return
+            editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "nano"
+            with self.suspend():
+                subprocess.run([editor, str(file_path)])
+            self._set_status(f"saved {file_path.relative_to(p.path)}")
+
+        self.push_screen(ConfigScreen(p), _open)
 
     def _notify_op(self, op: str, project: core.RalphProject,
                    ok: bool, msg: str) -> None:
