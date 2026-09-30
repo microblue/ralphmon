@@ -2,6 +2,8 @@
 
 A minimal terminal dashboard for monitoring and controlling [ralph-claude-code](https://github.com/RalphAI/ralph-claude-code) projects running on your local machine.
 
+![ralphmon dashboard: project table with live state, loop count, task progress and call quota, plus the selected project's ralph.log](docs/screenshots/dashboard.png)
+
 ## What it does
 
 Open it once and you can see:
@@ -9,7 +11,8 @@ Open it once and you can see:
 - Every project on your machine that has a `.ralph/` directory configured
 - Whether each ralph loop is idle, running, executing (mid-Claude call), or paused
 - Loop count, API call usage, and time since last status update
-- Live-tailing of the project's `live.log` in the right pane
+- Task progress from `.ralph/fix_plan.md` (checked / total)
+- Live-tailing of the project's logs (`ralph.log` by default) in the right pane
 
 And act on any project:
 
@@ -21,10 +24,18 @@ And act on any project:
 | `x` | Stop |
 | `d` | Delete `.ralph/` directory (all ralph state) |
 | `a` | Attach to the project's tmux session |
+| `c` | Pick a config file (PROMPT.md, AGENT.md, specs, …) and open it in `$EDITOR` |
+| `l` | Cycle log source (ralph.log → live.log → last Claude output) |
 | `r` | Force refresh now |
 | `q` | Quit |
 
 Destructive operations (restart, stop, delete) show a confirmation prompt first.
+
+| Config files (`c`) | Confirm before stop / restart / delete |
+|---|---|
+| ![Config file picker listing PROMPT.md, AGENT.md, specs and fix_plan.md](docs/screenshots/config-files.png) | ![Confirmation dialog asking to stop ralph in the selected project](docs/screenshots/confirm-stop.png) |
+
+<sub>Screenshots use synthetic demo projects.</sub>
 
 ## Requirements
 

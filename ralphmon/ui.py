@@ -197,7 +197,7 @@ class RalphMonApp(App):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("project", "state", "loops", "action", "calls", "last seen", "pid")
+        table.add_columns("project", "state", "loops", "tasks", "action", "calls", "last seen", "pid")
         self.refresh_projects()
         self.set_interval(self.REFRESH_INTERVAL, self.refresh_projects)
         self.set_interval(self.LOG_TAIL_INTERVAL, self._tail_log)
@@ -218,6 +218,7 @@ class RalphMonApp(App):
                 p.name,
                 state_cell,
                 str(p.loop_count) if p.loop_count else "—",
+                p.tasks_progress or "—",
                 p.last_action or "—",
                 p.calls_used or "—",
                 p.last_seen or "—",

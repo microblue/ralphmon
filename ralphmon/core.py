@@ -68,6 +68,21 @@ class RalphProject:
         return ""
 
     @property
+    def tasks_progress(self) -> str:
+        fix_plan = self.ralph_dir / "fix_plan.md"
+        if not fix_plan.exists():
+            return ""
+        try:
+            content = fix_plan.read_text()
+            completed = content.count("- [x]")
+            total = completed + content.count("- [ ]")
+            if total == 0:
+                return ""
+            return f"{completed}/{total}"
+        except OSError:
+            return ""
+
+    @property
     def live_log(self) -> Path:
         return self.ralph_dir / "live.log"
 

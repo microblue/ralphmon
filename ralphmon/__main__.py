@@ -12,12 +12,13 @@ def _print_list() -> int:
     if not projects:
         print("no ralph projects found", file=sys.stderr)
         return 1
-    fmt = "{:<30} {:<10} {:>7} {:<12} {:<10} {:<12} {:>7}"
-    print(fmt.format("project", "state", "loops", "action", "calls", "last seen", "pid"))
-    print("─" * 96)
+    fmt = "{:<30} {:<10} {:>7} {:<8} {:<12} {:<10} {:<12} {:>7}"
+    print(fmt.format("project", "state", "loops", "tasks", "action", "calls", "last seen", "pid"))
+    print("─" * 106)
     for p in projects:
         print(fmt.format(
             p.name[:30], p.state_label, p.loop_count or "—",
+            p.tasks_progress or "—",
             (p.last_action or "—")[:12], p.calls_used or "—",
             p.last_seen or "—", p.pid or "—",
         ))
